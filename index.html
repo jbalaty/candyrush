@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Phaser - Making your first game, part 1</title>
+  <script type="text/javascript" src="js/phaser.js"></script>
+  <script type="text/javascript" src="js/underscore-min.js"></script>
+  <script type="text/javascript" src="js/grid.js"></script>
+  <style type="text/css">
+    body {
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+
+<script type="text/javascript">
+
+
+var width = window.innerWidth;
+var height = window.innerHeight;
+var dips = window.devicePixelRatio;
+
+var game = new Phaser.Game(800, 600, Phaser.AUTO, '', { preload: preload, create: create, update: update, render: render });
+
+width = width * dips;
+height = height * dips;
+
+function preload() {
+  game.load.image('sky', 'assets/sky.png');
+  game.load.image('candy-blue', 'assets/candies/Blue.png');
+  game.load.image('candy-red', 'assets/candies/Red.png');
+  game.load.image('candy-yellow', 'assets/candies/Yellow.png');
+  game.load.image('candy-green', 'assets/candies/Green.png');
+  game.load.image('candy-violet', 'assets/candies/Violet.png');
+  game.load.image('star', 'assets/star.png');
+
+  game.load.audio('pop', ['assets/audio/effects/pop.ogg']);
+  game.load.audio('load', ['assets/audio/effects/load.wav']);
+}
+
+var stars;
+var score = 0;
+var scoreText;
+var timeText;
+var inputStateText;
+var gridCellSize = 58;
+var gridColumns = 8;
+var gridRows = 8;
+var candiesGrid = [];
+var playField;
+var candyTypes = ['blue', 'red', 'yellow', 'green', 'violet'];
+var candiesGroup
+var inputActive = false;
+var playFieldUpdateCallback = null;
+var gameDurationSecs = 30;
+
+var sound_remove_one;
+var sound_remove_stripe;
+
+function toGridCoords(x, y) {
+  return {x: Math.round(x / gridCellSize), y: Math.round(y / gridCellSize)}
+}
+
+function toObjectCoords(gridX, gridY) {
+  return {x: gridX * gridCellSize, y: gridY * gridCellSize}
+}
+
+function alignCandies(grid, tweenMilisecs, tweenType) {
+  tweenMilisecs = tweenMilisecs || 0;
+  tweenType = tweenType || Phaser.Easing.Elastic.Out;
+  grid.forEachCell(function (cell) {
+    if (cell.value && cell.state !== 'animated') {
+      playField.setStateAt(cell.x, cell.y, 'animated');
+      var objectCoords = toObjectCoords(cell.x, cell.y)
+      var tween = game.add.tween(cell.value);
+      tween.to({x: objectCoords.x, y: objectCoords.y},
+              tweenMilisecs + Math.random() * tweenMilisecs / 4,
+              tweenType);
+      tween.onComplete.add(function () {
+        playField.setStateAt(cell.x, cell.y, 'active');
+      });
+      tween.start();
+    }
+  });
+}
+
+function removeItem(playField, cell, playSound) {
+  playSound = typeof playSound == 'undefined' ? true : playSound;
+  if (cell.value && cell.state !== 'animated') {
+    playField.setStateAt(cell.x, cell.y, 'animated');
+    if (playSound) sound_remove_one.play('', 0, 1, false);
+    var tween = game.add.tween(cell.value);
+    tween.to({alpha: 0}, 120, Phaser.Easing.Linear.Out);
+    tween.onComplete.add(function () {
+      playField.removeValueAt(cell.x, cell.y);
+      cell.value.destroy();
+    });
+    tween.start();
+  }
+}
+
+function clickHandler(item) {
+  if (inputActive) {
+    var sprite = this;
+    var gridCoords = toGridCoords(sprite.x, sprite.y)
+    removeItem(playField, playField.getElementAt(gridCoords.x, gridCoords.y))
+  }
+}
+
+function createPlayFieldUpdateCallback(game, grid, candiesGroup, clickHandler, options) {
+  return function (type, oldcoord, newcoords) {
+    if (type === 'new') {
+//        var candyTypeIdx = (newcoords.x + newcoords.y) % candyTypes.length;
+      var candyTypeIdx = game.rnd.integerInRange(0, candyTypes.length - 1);
+      var candyType = candyTypes[candyTypeIdx];
+      console.log('Creating candy: ' + candyType);
+      var objectCoords = toObjectCoords(newcoords.x, newcoords.y);
+      var c = candiesGroup.create(objectCoords.x, objectCoords.y - 500, 'candy-' + candyType);
+      c.name = 'c' + newcoords.x + newcoords.y + '|' + candyType;
+      playField.setValueAt(newcoords.x, newcoords.y, c, 'animated');
+      c.scale.setTo(0.5, 0.5);
+      c.inputEnabled = true;
+//    c.input.enableDrag(false, true);
+      c.input.bringToTop = true;
+      c.events.onInputDown.add(clickHandler, c);
+      var tween = game.add.tween(c);
+      tween.to({x: objectCoords.x, y: objectCoords.y},
+              options.newCandy.tweenMilisecs + Math.random() * options.newCandy.tweenMilisecs / 4,
+              options.newCandy.tweenType);
+      tween.onComplete.add(function () {
+        playField.setStateAt(newcoords.x, newcoords.y, 'active');
+      });
+      tween.start();
+    } else if (type === 'move') {
+      var cell = playField.getElementAt(newcoords.x, newcoords.y);
+      playField.setStateAt(cell.x, cell.y, 'animated');
+      var objectCoords = toObjectCoords(newcoords.x, newcoords.y)
+      var tween = game.add.tween(cell.value);
+      tween.to({x: objectCoords.x, y: objectCoords.y},
+              options.moveCandy.tweenMilisecs,
+              options.moveCandy.tweenType);
+      tween.onComplete.add(function () {
+        playField.setStateAt(cell.x, cell.y, 'active');
+      });
+      tween.start();
+    }
+  }
+}
+
+var processLongStripes = function (longStripes) {
+  longStripes.forEach(function (stripe) {
+    console.log('Processing stripe of length: ' + stripe.length);
+    sound_remove_stripe.play('', 0, 0.5, false);
+    stripe.forEach(function (cell) {
+      removeItem(playField, cell, false);
+    });
+  });
+}
+
+var computeScore = function (longStripes) {
+  longStripes.forEach(function (stripe) {
+    score += stripe.length;
+    score += stripe.length - 3; // add one point for every item longer than 3
+  });
+}
+
+var cellCompatibilityComparer = function (previous, current) {
+  return (previous.value && previous.value.key) === (current.value && current.value.key);
+}
+
+function create() {
+//    this.game.scale.scaleMode = Phaser.ScaleManager.SHOW_ALL;
+//    this.game.scale.pageAlignHorizontally = true;
+//    this.game.scale.pageAlignVertically = true;
+  //this.game.scale.setScreenSize(true);
+  //game.physics.arcade.gravity.y = 400;
+
+  var sky = game.add.sprite(0, 0, 'sky');
+
+  candiesGroup = game.add.group();
+  candiesGroup.x = 200;
+  candiesGroup.y = 60;
+
+  playField = new CR.PlayGrid(8, 8);
+  playFieldUpdateCallback = createPlayFieldUpdateCallback(game, playField, candiesGroup, clickHandler,
+          { newCandy: {tweenMilisecs: 2000, tweenType: Phaser.Easing.Elastic.Out} });
+  playField.processGaps(playFieldUpdateCallback);
+
+  playFieldUpdateCallback = createPlayFieldUpdateCallback(game, playField, candiesGroup, clickHandler,
+          {
+            newCandy: {tweenMilisecs: 700, tweenType: Phaser.Easing.Bounce.Out},
+            moveCandy: {tweenMilisecs: 500, tweenType: Phaser.Easing.Bounce.Out}
+          });
+
+  scoreText = game.add.text(16, 16, '0', { font: '32px arial', fill: '#FFF' });
+  timeText = game.add.text(16, 66, '' + gameDurationSecs, { font: '38px arial', fill: '#F22' });
+  inputStateText = game.add.text(16, 156, '', { font: '32px arial', fill: '#000' });
+//  cursors = game.input.keyboard.createCursorKeys();
+  sound_remove_one = game.add.audio('pop', 1, false);
+  sound_remove_stripe = game.add.audio('load', 1, false);
+
+}
+
+var remainingTime = gameDurationSecs;
+function updateCounter(time) {
+  remainingTime--;
+  if (remainingTime >= 0) {
+    timeText.setText('' + remainingTime);
+  }
+}
+
+var gameStartTime = null;
+var roundStartTime = null;
+function update(time) {
+  gameStartTime = gameStartTime || game.time.now;
+  // process changes only if all items are stable (state != 'animated')
+  var processChanges = true;
+  playField.forEachCell(function (cell) {
+    if (cell.state === 'animated') {
+      processChanges = false;
+    }
+  });
+
+  //inputStateText.setText("Input active: " + inputActive);
+  inputActive = processChanges && remainingTime >= 0;
+  if (processChanges && remainingTime >= 0) {
+    if (!roundStartTime) {
+      roundStartTime = roundStartTime || game.time.now;
+      game.time.events.loop(Phaser.Timer.SECOND, updateCounter, this);
+    }
+    var stripes = playField.findStripes(cellCompatibilityComparer)
+    var longStripes = _.filter(stripes, function (stripe) {
+      var notEmptyItems = _.filter(stripe, function (item) {
+        return item.state !== 'empty'
+      });
+      return stripe.length >= 3 && notEmptyItems.length > 0;
+    });
+    computeScore(longStripes);
+    processLongStripes(longStripes);
+    playField.processGaps(playFieldUpdateCallback);
+  }
+
+  if (remainingTime >= 0) {
+    scoreText.setText('Score: ' + score)
+  } else {
+    scoreText.setText('Your score: ' + score)
+    scoreText.fontSize = 60;
+    scoreText.fontWeight = 'bold';
+    scoreText.x = 170;
+    scoreText.y = 200;
+  }
+}
+
+function render() {
+//  game.debug.inputInfo(32, 32);
+}
+</script>
+
+</body>
+</html>
